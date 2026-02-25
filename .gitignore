@@ -1,7 +1,29 @@
+# Environment
 .env
 .agent
-*__pycache__
-*.ipynb
+.agent/
+.agents/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDEs
 .cursor/
-specs
+.vscode/
+.idea/
+
+# Project Specific
+specs/
 .specify
+.pytest_cache/
+.DS_Store
+
+# UV
+uv.lock
+# (Keep uv.lock if you want reproducible builds in repo, but often ignored in early dev)
+# For this project, we'll keep it for CI reproducibility.
+
+# Files
+!TRP1 Challenge Week 2_ The Automaton Auditor.pdf
+*.ipynb
