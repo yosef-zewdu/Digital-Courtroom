@@ -1,0 +1,7 @@
+.env
+.agent
+*__pycache__
+*.ipynb
+.cursor/
+specs
+.specify
