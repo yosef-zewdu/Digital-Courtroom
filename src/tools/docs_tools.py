@@ -1,5 +1,6 @@
 import os
 import re
+import ast
 from pathlib import Path
 from typing import List, Dict, Optional
 from docling.document_converter import DocumentConverter
@@ -7,101 +8,87 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.vectorstores import InMemoryVectorStore
 from langchain_core.prompts import ChatPromptTemplate
-from dotenv import load_dotenv
-from src.llm_factory import get_llm
-import ast
 from langchain_core.messages import HumanMessage
+from langchain_core.tools import tool
+from src.llm_factory import get_llm
 
-# Load environment variables
-load_dotenv()
+# Cache for RAG objects to avoid redundant processing
+_rag_cache = {}
 
-def ingest_pdf(path: str) -> str:
-    """Parses a PDF file and returns its content as Markdown text."""
-    if not Path(path).exists():
-        return ""
-    try:
+def get_rag(pdf_path: str) -> Optional['DocumentRAG']:
+    """Helper to get or create a RAG object for a PDF."""
+    if pdf_path not in _rag_cache:
+        if not Path(pdf_path).exists():
+            return None
+        print(f"Initializing RAG for {pdf_path}...")
         converter = DocumentConverter()
-        result = converter.convert(path)
-        return result.document.export_to_markdown()
+        try:
+            result = converter.convert(pdf_path)
+            markdown = result.document.export_to_markdown()
+            _rag_cache[pdf_path] = DocumentRAG(markdown)
+        except Exception:
+            return None
+    return _rag_cache[pdf_path]
+
+@tool
+def query_pdf_report(pdf_path: str, question: str) -> str:
+    """
+    Queries a PDF report using RAG. Use this to find specialized architectural 
+    explanations or mentioned features in the documentation.
+    """
+    rag = get_rag(pdf_path)
+    if not rag:
+        return f"Error: Could not process PDF at {pdf_path}"
+    return rag.query(question)
+
+@tool
+def extract_paths_from_pdf(pdf_path: str) -> str:
+    """
+    Extracts all mentioned file paths from a PDF report. 
+    Returns them as a comma-separated list.
+    """
+    rag = get_rag(pdf_path)
+    if not rag:
+        return f"Error: Could not process PDF at {pdf_path}"
+    
+    # We'll use the existing extract_file_paths logic but adapted for a tool
+    text = rag.document_text[:8000] # Use a larger chunk for path extraction
+    llm = get_llm()
+    prompt = f"""
+    You are a forensic document analyst. Extract all unique file paths mentioned in the following text.
+    Return ONLY a valid Python list of strings. No explanation.
+    
+    Text: {text}
+    """
+    try:
+        response = llm.invoke([HumanMessage(content=prompt)])
+        content = response.content.strip()
+        if "```" in content:
+            content = re.sub(r"```(python)?", "", content).strip("`").strip()
+        paths = ast.literal_eval(content)
+        return ", ".join(paths) if isinstance(paths, list) else "None found."
     except Exception as e:
-        print(f"Error parsing PDF {path}: {e}")
-        return ""
+        return f"Error extracting paths: {str(e)}"
 
 class DocumentRAG:
     """RAG system for a single document with flexible LLM and local embeddings."""
     def __init__(self, document_text: str):
-        if not document_text:
-            self.vectorstore = None
-            return
-            
+        self.document_text = document_text
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
         docs = text_splitter.create_documents([document_text])
-        
-        # Initialize Local Embeddings to avoid Gemini quota limits
-        print("Initializing local HuggingFace embeddings...")
         embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-        
-        # Use InMemoryVectorStore from langchain-core
         self.vectorstore = InMemoryVectorStore.from_documents(docs, embeddings)
-        
-        # Load LLM from factory (defaults to OpenRouter if set in .env)
         self.llm = get_llm()
 
     def query(self, question: str) -> str:
         """Queries the document using RAG."""
-        if not self.vectorstore:
-            return "No document content available."
-            
         relevant_docs = self.vectorstore.similarity_search(question, k=5)
         context = "\n\n".join([doc.page_content for doc in relevant_docs])
-        
         prompt = ChatPromptTemplate.from_template("""
         You are a forensic document analyst. Answer the question based ONLY on the provided context.
-        If the information is not in the context, say "Information not found in report."
-        
-        Context:
-        {context}
-        
+        Context: {context}
         Question: {question}
-        
-        Answer:""")
-        
+        """)
         chain = prompt | self.llm
         response = chain.invoke({"context": context, "question": question})
         return response.content
-
-
-
-def extract_file_paths(text: str) -> List[str]:
-    """Extracts potential file paths from text using LLM and AST parsing."""
-    if not text:
-        return []
-
-    llm = get_llm()
-    prompt = f"""
-    You are a forensic document analyst. Extract all unique file paths mentioned in the following text.
-    Return ONLY a valid Python list of strings. No explanation, no markdown blocks.
-    
-    Example: ["src/graph.py", "src/state.py"]
-    
-    Text:
-    {text[:4000]}
-    """
-    
-    try:
-        response = llm.invoke([HumanMessage(content=prompt)])
-        content = response.content.strip()
-        
-        # Remove markdown code blocks if present
-        if content.startswith("```"):
-            content = re.sub(r"```(python)?", "", content).strip("`").strip()
-            
-        # Use ast.literal_eval for safe parsing of the list
-        paths = ast.literal_eval(content)
-        if isinstance(paths, list):
-            return [str(p) for p in paths]
-        return []
-    except Exception as e:
-        print(f"Error extracting paths with AST: {e}")
-        # Fallback to empty list or basic regex if needed, but user asked for AST.
-        return []

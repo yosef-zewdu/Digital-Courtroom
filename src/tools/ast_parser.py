@@ -1,23 +1,19 @@
 import ast
 from pathlib import Path
-from src.state import Evidence
+from langchain_core.tools import tool
 
-def analyze_graph_wiring(repo_path: Path) -> Evidence:
-    """Forensic Protocol B: Graph Wiring Analysis."""
-    graph_path = repo_path / "src/graph.py"
-    if not graph_path.exists():
-        return Evidence(
-            goal="Analyze graph wiring for parallelism",
-            found=False,
-            location="src/graph.py",
-            content=None,
-            rationale="src/graph.py not found.",
-            confidence=1.0
-        )
+@tool
+def analyze_graph_wiring(repo_path: str) -> str:
+    """
+    Analyzes the LangGraph StateGraph wiring in src/graph.py using AST.
+    Returns a textual description of the edges and detects parallel fan-out.
+    """
+    path = Path(repo_path) / "src/graph.py"
+    if not path.exists():
+        return "Error: src/graph.py not found."
     
     try:
-        tree = ast.parse(graph_path.read_text())
-        fan_out_detected = False
+        tree = ast.parse(path.read_text())
         edges = []
         
         for node in ast.walk(tree):
@@ -33,27 +29,16 @@ def analyze_graph_wiring(repo_path: Path) -> Evidence:
                         
                         edges.append((src, dst))
 
-        # Simple fan-out detection: multiple edges from the same source
+        # Simple fan-out detection
         sources = [e[0] for e in edges if e[0]]
-        for s in set(sources):
-            if sources.count(s) > 1:
-                fan_out_detected = True
-                break
+        fan_out_sources = [s for s in set(sources) if sources.count(s) > 1]
         
-        return Evidence(
-            goal="Analyze graph wiring for parallelism",
-            found=fan_out_detected,
-            location="src/graph.py",
-            content=str(edges),
-            rationale=f"Detected edges: {edges}. Fan-out detected: {fan_out_detected}.",
-            confidence=1.0
-        )
+        report = f"Detected edges: {edges}\n"
+        if fan_out_sources:
+            report += f"Fan-out detected from nodes: {fan_out_sources}"
+        else:
+            report += "No parallel fan-out detected (purely linear flow)."
+            
+        return report
     except Exception as e:
-        return Evidence(
-            goal="Analyze graph wiring for parallelism",
-            found=False,
-            location="src/graph.py",
-            content=str(e),
-            rationale=f"Error parsing graph.py: {str(e)}",
-            confidence=0.5
-        )
+        return f"Error parsing graph.py: {str(e)}"

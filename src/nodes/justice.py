@@ -1,11 +1,21 @@
+import json
+import logging
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Optional
 from src.state import AgentState, AuditReport, CriterionResult, JudicialOpinion
 
+logger = logging.getLogger(__name__)
+
 def synthesize_verdicts(state: AgentState) -> Dict:
     """
-    ChiefJustice node: deterministic synthesis of judicial opinions.
-    Applies rules from the PDF: Security, Evidence, Functionality.
+    ChiefJustice node: The Synthesis Engine (The Supreme Court).
+    
+    Resolves dialectical conflicts between Prosecutor, Defense, and Tech Lead
+    using hardcoded deterministic rules:
+    - Rule of Security: Security flaws cap at 3.
+    - Rule of Evidence: Overrule hallucination if evidence is missing.
+    - Rule of Functionality: Tech Lead weight for architecture.
     """
     rubric_dimensions = state.get("rubric_dimensions", [])
     opinions = state.get("opinions", [])
@@ -13,110 +23,137 @@ def synthesize_verdicts(state: AgentState) -> Dict:
     
     criterion_results: List[CriterionResult] = []
     
+    # 1. Process each criterion
     for dimension in rubric_dimensions:
         dim_id = dimension.get("id")
         dim_name = dimension.get("name", dim_id)
         
         # Get opinions for this dimension
         dim_opinions = [op for op in opinions if op.criterion_id == dim_id]
-        
+        if not dim_opinions:
+            continue
+
         prosecutor_op = next((op for op in dim_opinions if op.judge == "Prosecutor"), None)
         defense_op = next((op for op in dim_opinions if op.judge == "Defense"), None)
         techlead_op = next((op for op in dim_opinions if op.judge == "TechLead"), None)
         
-        # Rules logic
+        # Base score (average)
         scores = [op.score for op in dim_opinions]
-        avg_score = sum(scores) / len(scores) if scores else 1.0
-        final_score = avg_score
-        
+        final_score = sum(scores) / len(scores)
         applied_rules = []
-        
-        # Rule of Security
-        if prosecutor_op and prosecutor_op.score <= 2 and "security" in prosecutor_op.argument.lower():
-            # Check if there is actual evidence for security flaw
-            has_security_evidence = any(
-                ev.found is False and "security" in ev.goal.lower() 
-                for ev_list in evidences.values() for ev in ev_list
-            ) # Simplified check
-            if has_security_evidence:
-                final_score = min(final_score, 3.0)
-                applied_rules.append("Rule of Security")
-        
-        # Rule of Evidence (Hallucination check)
-        if defense_op:
-            # If defense claims something that evidence says is missing
-            # Simplified: check if any cited evidence was actually NOT found
-            any_hallucination = any(
-                ev.found is False for dim_ev in evidences.values() for ev in dim_ev 
-                if ev.goal.lower() in defense_op.argument.lower() # Rough check
-            )
-            if any_hallucination:
-                final_score = max(1.0, final_score - 1.0)
-                applied_rules.append("Rule of Evidence (Hallucination)")
 
-        # Rule of Functionality
-        if dim_id == "graph_orchestration" and techlead_op:
+        is_sec_flaw = False
+        if prosecutor_op and prosecutor_op.score <= 2:
+            is_sec_flaw = any(word in prosecutor_op.argument.lower() for word in ["security", "flaw", "vulnerability", "injection", "unsanitized"])
+
+        # --- RULE 2: Rule of Evidence (Hallucination Check) ---
+        # If Defense claims success but evidence specifically says FOUND: False
+        if defense_op and defense_op.score >= 4:
+            dim_evidence = evidences.get(dim_id, [])
+            missing_critical = any(ev.found is False for ev in dim_evidence if ev.confidence > 0.8)
+            if missing_critical:
+                final_score = max(1.0, final_score - 1.5) # Penalty for hallucination
+                applied_rules.append("Rule of Evidence: Defense overruled for evidence hallucination.")
+
+        # --- RULE 3: Rule of Functionality (Tech Lead Weight) ---
+        if dimension.get("target_artifact") == "github_repo" and techlead_op:
+            # If Tech Lead says it's modular (Score >= 4), pull the score up
             if techlead_op.score >= 4:
-                final_score = max(final_score, techlead_op.score)
-                applied_rules.append("Rule of Functionality")
+                final_score = (final_score + techlead_op.score) / 2
+                applied_rules.append("Rule of Functionality: Tech Lead confirms modular architecture.")
+
+        # --- RULE 1: Rule of Security (Hard Cap) ---
+        # Applied last to ensure it cannot be overridden by other rules
+        if is_sec_flaw:
+            final_score = min(final_score, 3.0)
+            applied_rules.append("Rule of Security: Flaw detected, score capped at 3.")
 
         # Dissent check
-        score_variance = max(scores) - min(scores) if len(scores) > 1 else 0
+        score_variance = max(scores) - min(scores)
         dissent_summary = None
-        if score_variance > 2:
-            dissent_summary = f"High variance ({score_variance}) detected between judges."
-            if prosecutor_op and defense_op:
-                dissent_summary += f" Prosecutor: {prosecutor_op.score}, Defense: {defense_op.score}."
+        if score_variance >= 2:
+            dissent_summary = f"DISSENT DETECTED: Variance of {score_variance} between {prosecutor_op.judge if prosecutor_op else 'Judges'} and {defense_op.judge if defense_op else 'Judges'}."
+            if applied_rules:
+                dissent_summary += " Resolved by: " + "; ".join(applied_rules)
 
-        final_score_int = int(round(final_score))
-        
-        # Remediation
-        remediation = f"Fix concerns raised by judges for {dim_name}."
+        # Final Formatting
+        final_score_rounded = int(round(final_score))
+        remediation = f"Fix findings in {dim_id}."
         if prosecutor_op and prosecutor_op.score < 3:
-            remediation += f" Prosecutor concerns: {prosecutor_op.argument[:100]}"
-        
+            remediation = f"Address Critical Lens findings: {prosecutor_op.argument[:200]}..."
+
         criterion_results.append(CriterionResult(
             dimension_id=dim_id,
             dimension_name=dim_name,
-            final_score=final_score_int,
+            final_score=final_score_rounded,
             judge_opinions=dim_opinions,
             dissent_summary=dissent_summary,
             remediation=remediation
         ))
 
-    # Build AuditReport
+    # 2. Build AuditReport
     overall_score = sum(c.final_score for c in criterion_results) / len(criterion_results) if criterion_results else 0.0
     
-    audit_report = AuditReport(
-        repo_url=state.get("repo_url", ""),
-        executive_summary=f"Audit completed on {datetime.now().isoformat()}. Overall Grade: {overall_score:.2f}/5.0",
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    report = AuditReport(
+        repo_url=state.get("repo_url", "N/A"),
+        executive_summary=f"Audit completed at {now_str}. The system evaluated {len(criterion_results)} dimensions across code and documentation. Final Verdict: {overall_score:.2f}/5.0",
         overall_score=overall_score,
         criteria=criterion_results,
-        remediation_plan="\n".join([f"- {c.dimension_name}: {c.remediation}" for c in criterion_results if c.final_score < 4])
+        remediation_plan="\n".join([f"### {c.dimension_name}\n- {c.remediation}" for c in criterion_results if c.final_score < 4])
     )
+
+    # 3. Save Markdown Report
+    output_dir = Path("audit")
+        
+    output_dir.mkdir(parents=True, exist_ok=True)
+    report_md = generate_report_markdown(report)
     
-    return {"final_report": audit_report}
+    # Generate timestamped filename
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"audit_report_{timestamp}.md"
+    
+    # Save both timestamped and general version
+    with open(output_dir/filename, "w") as f:
+        f.write(report_md)
+    with open(output_dir/"audit_report.md", "w") as f:
+        f.write(report_md)
+    
+    print(f"--- Chief Justice: Final Audit Report Generated at {output_dir}/{filename} ---")
+
+    return {"final_report": report}
 
 def generate_report_markdown(report: AuditReport) -> str:
-    """Renders the AuditReport as Markdown."""
+    """Professional rendering of the AuditReport as Markdown."""
     sections = [
-        f"# Audit Report: {report.repo_url}",
-        f"\n## Executive Summary\n{report.executive_summary}",
-        f"**Overall Score**: {report.overall_score:.2f}/5.0",
-        "\n## Criterion Breakdown"
+        f"# Judicial Audit Report: {report.repo_url}",
+        f"\n## 🏛️ Executive Summary\n{report.executive_summary}",
+        f"**Consolidated Score**: `{report.overall_score:.2f} / 5.0`\n",
+        "---",
+        "## ⚖️ Criterion Breakdown"
     ]
     
     for c in report.criteria:
         sections.append(f"### {c.dimension_name}")
-        sections.append(f"**Final Score**: {c.final_score}/5")
+        sections.append(f"**Final Verdict**: `{c.final_score}/5`")
+        
         if c.dissent_summary:
-            sections.append(f"> **Dissent**: {c.dissent_summary}")
-        sections.append(f"**Remediation**: {c.remediation}")
-        sections.append("\nOpinions:")
+            sections.append(f"> [!WARNING]\n> **Conflict Resolution**: {c.dissent_summary}")
+        
+        sections.append("\n**Judicial Opinions:**")
         for op in c.judge_opinions:
-            sections.append(f"- **{op.judge}** ({op.score}/5): {op.argument}")
+            badge = "🔴" if op.score <= 2 else "🟡" if op.score <= 3 else "🟢"
+            sections.append(f"- **{op.judge}** {badge} ({op.score}/5): {op.argument}")
+        
+        sections.append(f"\n**Required Action**: {c.remediation}")
+        sections.append("\n---")
             
-    sections.append("\n## Remediation Plan")
-    sections.append(report.remediation_plan)
+    sections.append("\n## 🛠️ Remediation Plan")
+    if not report.remediation_plan.strip():
+        sections.append("No critical remediations required. Pass marks achieved across all dimensions.")
+    else:
+        sections.append(report.remediation_plan)
+    
+    sections.append(f"\n*Generated by The Automaton Auditor on {datetime.now().date()}*")
     
     return "\n".join(sections)
