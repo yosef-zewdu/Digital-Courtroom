@@ -15,6 +15,8 @@ from src.tools.repo_tools import (
 )
 from src.tools.ast_parser import analyze_graph_wiring
 from src.tools.docs_tools import query_pdf_report, extract_paths_from_pdf
+from src.tools.vision_tools import extract_images_from_pdf, analyze_image_with_vision, cleanup_vision_images
+
 
 def _run_forensic_agent(llm, tools, instruction: str, goal: str) -> Evidence:
     """Runs a ReAct agent to collect evidence for a specific goal."""
@@ -73,7 +75,7 @@ def repo_investigator_node(state: AgentState) -> Dict:
     return {"evidences": evidences}
 
 def doc_analyst_node(state: AgentState) -> Dict:
-    """Dynamic agent that audits the PDF report using RAG and path extraction."""
+    """Dynamic agent that audits the PDF report using RAG tools."""
     llm = get_llm()
     tools = [query_pdf_report, extract_paths_from_pdf]
     
@@ -93,6 +95,31 @@ def doc_analyst_node(state: AgentState) -> Dict:
     return {"evidences": evidences}
 
 def vision_inspector_node(state: AgentState) -> Dict:
-    """Dynamic agent that audits visual diagrams from the report."""
-    # Placeholder for vision agent - in a real system, you'd add vision-capable tools
-    return {"evidences": {"swarm_visual": [Evidence(goal="Analyze diagrams", found=False, location="N/A", rationale="Vision integration pending", confidence=1.0)]}}
+    """Dynamic agent that audits visual diagrams using Qwen2.5-VL via Hugging Face."""
+    llm = get_llm()
+    # Note: tools are bound to the agent
+    tools = [extract_images_from_pdf, analyze_image_with_vision]
+    
+    pdf_path = state.get("pdf_path")
+    repo_url = state.get("repo_url")
+    
+    dimensions = [d for d in state.get("rubric_dimensions", []) if d.get("target_artifact") == "vision_report"]
+    
+    if not dimensions:
+        dimensions = [d for d in state.get("rubric_dimensions", []) if "diagram" in d.get("name", "").lower() or d.get("id") == "swarm_visual"]
+
+    evidences = {}
+    for dim in dimensions:
+        dim_id = dim["id"]
+        instruction = dim["forensic_instruction"]
+        # Explicitly tell the agent which model to use for vision tasks via tool description or instruction
+        full_instruction = f"PDF Path: {pdf_path}\nUSE Qwen2.5-VL for visual analysis.\n{instruction}"
+        
+        print(f"Agent investigating visuals: {dim_id}")
+        ev = _run_forensic_agent(llm, tools, full_instruction, dim["name"])
+        evidences[dim_id] = [ev]
+    
+    # Purge all temporary vision images after analysis
+    cleanup_vision_images()
+        
+    return {"evidences": evidences}
