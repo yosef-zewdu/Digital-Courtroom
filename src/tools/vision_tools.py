@@ -65,7 +65,7 @@ def analyze_image_with_vision(image_path: str, prompt: str) -> str:
     if not os.path.exists(image_path):
         return f"Error: Image not found at {image_path}"
     
-    hf_token = os.getenv("HUGGING_FACE_KEY")
+    hf_token = os.getenv("HF_TOKEN")
     if not hf_token:
         return "Error: HUGGING_FACE_KEY not found in .env"
     
