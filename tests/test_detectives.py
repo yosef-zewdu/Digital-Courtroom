@@ -19,10 +19,12 @@ def mock_state():
         "final_report": None
     }
 
+@patch("src.nodes.detectives.get_llm")
 @patch("src.nodes.detectives.clone_repository")
 @patch("src.nodes.detectives._run_forensic_agent")
-def test_repo_investigator_node(mock_run_agent, mock_clone, mock_state):
+def test_repo_investigator_node(mock_run_agent, mock_clone, mock_get_llm, mock_state):
     # Setup mocks
+    mock_get_llm.return_value = MagicMock()
     mock_clone.invoke.return_value = "/tmp/fake_repo"
     mock_run_agent.return_value = Evidence(goal="test", found=True, location="test", rationale="test", confidence=1.0)
     
@@ -35,8 +37,10 @@ def test_repo_investigator_node(mock_run_agent, mock_clone, mock_state):
     assert len(result["evidences"]["git_forensic_analysis"]) == 1
     assert isinstance(result["evidences"]["git_forensic_analysis"][0], Evidence)
 
+@patch("src.nodes.detectives.get_llm")
 @patch("src.nodes.detectives._run_forensic_agent")
-def test_doc_analyst_node(mock_run_agent, mock_state):
+def test_doc_analyst_node(mock_run_agent, mock_get_llm, mock_state):
+    mock_get_llm.return_value = MagicMock()
     # Mock the LLM agent output
     mock_run_agent.return_value = Evidence(goal="test docs", found=True, location="report.pdf", rationale="Found in docs", confidence=0.8)
     
@@ -47,8 +51,10 @@ def test_doc_analyst_node(mock_run_agent, mock_state):
     assert len(result["evidences"]["theoretical_depth"]) == 1
     assert result["evidences"]["theoretical_depth"][0].found is True
 
+@patch("src.nodes.detectives.get_llm")
 @patch("src.nodes.detectives._run_forensic_agent")
-def test_vision_inspector_node(mock_run_agent, mock_state):
+def test_vision_inspector_node(mock_run_agent, mock_get_llm, mock_state):
+    mock_get_llm.return_value = MagicMock()
     # Mock the LLM agent output
     mock_run_agent.return_value = Evidence(goal="test vision", found=True, location="/tmp/image.png", rationale="Found diagram", confidence=0.9)
     
