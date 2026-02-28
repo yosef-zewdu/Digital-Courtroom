@@ -3,6 +3,7 @@ from pathlib import Path
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.prebuilt import create_react_agent
+import time
 from src.state import AgentState, Evidence
 from src.llm_factory import get_llm
 from src.tools.repo_tools import (
@@ -34,14 +35,49 @@ def _run_forensic_agent(llm, tools, instruction: str, goal: str) -> Evidence:
     - Location: Where you found it (file path, commit hash, etc).
     - Confidence: A float 0.0-1.0.
     """
-    
-    result = agent.invoke({"messages": [HumanMessage(content=prompt)]})
+    max_retries = 3
+    result = None
+    for attempt in range(max_retries):
+        try:
+            result = agent.invoke({"messages": [HumanMessage(content=prompt)]})
+            break
+        except Exception as e:
+            if attempt == max_retries - 1:
+                print(f"Failed to investigate {goal} after {max_retries} attempts: {e}")
+                return Evidence(
+                    goal=goal,
+                    found=False,
+                    content=f"EVIDENCE_MISSING: Agent encountered API error: {e}",
+                    location="API Failure",
+                    rationale="API failed to process request.",
+                    confidence=0.0
+                )
+            print(f"API Error during {goal} investigation (attempt {attempt+1}/{max_retries}): {e}. Retrying in 5 seconds...")
+            time.sleep(5)
+            
     last_msg = result["messages"][-1].content
     
-    # Simple parser for agent output
-    found = "EVIDENCE_FOUND:" in last_msg
-    rationale = last_msg.split("\n")[0] # First line as rationale summary
+    # Robust parser for agent output
+    upper_msg = last_msg.upper()
+    found = "EVIDENCE_FOUND" in upper_msg and (
+        "EVIDENCE_MISSING" not in upper_msg or 
+        upper_msg.find("EVIDENCE_FOUND") < upper_msg.find("EVIDENCE_MISSING")
+    )
     
+    # Extract robust rationale (skip markdown headers)
+    lines = [line.strip() for line in last_msg.split("\n") if line.strip()]
+    rationale = "Evidence reviewed."
+    for line in lines:
+        upper_line = line.upper()
+        if "EVIDENCE_FOUND" in upper_line or "EVIDENCE_MISSING" in upper_line or line.startswith("#"):
+            continue
+        if upper_line.startswith("RATIONALE:"):
+            rationale = line[10:].strip()
+        else:
+            rationale = line
+        if rationale:
+            break
+            
     return Evidence(
         goal=goal,
         found=found,
@@ -53,7 +89,10 @@ def _run_forensic_agent(llm, tools, instruction: str, goal: str) -> Evidence:
 
 def repo_investigator_node(state: AgentState) -> Dict:
     """Dynamic agent that audits the repository using tools."""
-    llm = get_llm()
+    import os
+    # Use key 1 for Repo
+    key = os.getenv("OPENROUTER_API_KEY")
+    llm = get_llm(api_key=key)
     tools = [clone_repository, list_files, read_file, run_git_log, grep_search, analyze_graph_wiring]
     
     repo_url = state.get("repo_url")
@@ -70,23 +109,26 @@ def repo_investigator_node(state: AgentState) -> Dict:
         ev = _run_forensic_agent(llm, tools, full_instruction, dim["name"])
         evidences[dim_id] = [ev]
     
-    # Cleanup any temp dirs created during this node's run
-    cleanup_temp_dirs()
     return {"evidences": evidences}
 
 def doc_analyst_node(state: AgentState) -> Dict:
     """Dynamic agent that audits the PDF report using RAG tools."""
-    llm = get_llm()
-    tools = [query_pdf_report, extract_paths_from_pdf]
+    import os
+    # Use key 2 for Docs
+    key = os.getenv("OPENROUTER_API_KEY_2") or os.getenv("OPENROUTER_API_KEY")
+    llm = get_llm(api_key=key)
+    # Also provide repo tools so the doc analyst can cross-reference file paths!
+    tools = [query_pdf_report, extract_paths_from_pdf, clone_repository, list_files, read_file]
     
     pdf_path = state.get("pdf_path")
+    repo_url = state.get("repo_url")
     dimensions = [d for d in state.get("rubric_dimensions", []) if d.get("target_artifact") == "pdf_report"]
     
     evidences = {}
     for dim in dimensions:
         dim_id = dim["id"]
         instruction = dim["forensic_instruction"]
-        full_instruction = f"PDF Path: {pdf_path}\n{instruction}"
+        full_instruction = f"Repository URL: {repo_url}\nPDF Path: {pdf_path}\n{instruction}"
         
         print(f"Agent investigating documentation: {dim_id}")
         ev = _run_forensic_agent(llm, tools, full_instruction, dim["name"])
@@ -96,12 +138,14 @@ def doc_analyst_node(state: AgentState) -> Dict:
 
 def vision_inspector_node(state: AgentState) -> Dict:
     """Dynamic agent that audits visual diagrams using Qwen2.5-VL via Hugging Face."""
-    llm = get_llm()
+    import os
+    # Use key 3 for Vision
+    key = os.getenv("OPENROUTER_API_KEY_3") or os.getenv("OPENROUTER_API_KEY")
+    llm = get_llm(api_key=key)
     # Note: tools are bound to the agent
     tools = [extract_images_from_pdf, analyze_image_with_vision]
     
     pdf_path = state.get("pdf_path")
-    repo_url = state.get("repo_url")
     
     dimensions = [d for d in state.get("rubric_dimensions", []) if d.get("target_artifact") == "vision_report"]
     
@@ -119,7 +163,4 @@ def vision_inspector_node(state: AgentState) -> Dict:
         ev = _run_forensic_agent(llm, tools, full_instruction, dim["name"])
         evidences[dim_id] = [ev]
     
-    # Purge all temporary vision images after analysis
-    cleanup_vision_images()
-        
     return {"evidences": evidences}

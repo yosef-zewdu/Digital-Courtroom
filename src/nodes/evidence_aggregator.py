@@ -1,6 +1,8 @@
 import logging
 from typing import Dict
 from src.state import AgentState
+from src.tools.repo_tools import cleanup_temp_dirs
+from src.tools.vision_tools import cleanup_vision_images
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,10 @@ def aggregate_evidence(state: AgentState) -> Dict:
         count = len(items)
         found_count = sum(1 for item in items if item.found)
         print(f"  - [{dim_id}]: {count} items ({found_count} found)")
+
+    # Clean up all temp resources since all detective nodes have finished
+    cleanup_temp_dirs()
+    cleanup_vision_images()
 
     # Return the evidences (operator.ior will handle the merge in state)
     return {"evidences": evidences}

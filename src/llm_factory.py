@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-def get_llm(provider: Optional[str] = None, model: Optional[str] = None) -> BaseChatModel:
+def get_llm(provider: Optional[str] = None, model: Optional[str] = None, api_key: Optional[str] = None) -> BaseChatModel:
     """
     Returns a LangChain ChatModel instance based on the provider.
     Supported providers: 'gemini', 'openrouter'.
@@ -20,10 +20,10 @@ def get_llm(provider: Optional[str] = None, model: Optional[str] = None) -> Base
     
     elif provider == "openrouter":
         model = model or os.getenv("OPENROUTER_MODEL", "arcee-ai/trinity-large-preview:free")
-        api_key = os.getenv("OPENROUTER_API_KEY")
+        key = api_key or os.getenv("OPENROUTER_API_KEY")
         return ChatOpenAI(
             base_url="https://openrouter.ai/api/v1",
-            openai_api_key=api_key,
+            openai_api_key=key,
             model=model,
             temperature=0
         )
