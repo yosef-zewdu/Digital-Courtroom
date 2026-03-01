@@ -16,18 +16,22 @@ from src.llm_factory import get_llm
 _rag_cache = {}
 
 def get_rag(pdf_path: str) -> Optional['DocumentRAG']:
-    """Helper to get or create a RAG object for a PDF."""
-    if pdf_path not in _rag_cache:
-        if not Path(pdf_path).exists():
-            return None
-        print(f"Initializing RAG for {pdf_path}...")
-        converter = DocumentConverter()
-        try:
-            result = converter.convert(pdf_path)
-            markdown = result.document.export_to_markdown()
-            _rag_cache[pdf_path] = DocumentRAG(markdown)
-        except Exception:
-            return None
+    """Helper to get or create a RAG object for a PDF. Synchronous."""
+    if pdf_path in _rag_cache:
+        return _rag_cache[pdf_path]
+        
+    if not Path(pdf_path).exists():
+        return None
+        
+    print(f"Initializing RAG for {pdf_path}...")
+    converter = DocumentConverter()
+    try:
+        result = converter.convert(pdf_path)
+        markdown = result.document.export_to_markdown()
+        _rag_cache[pdf_path] = DocumentRAG(markdown)
+    except Exception as e:
+        print(f"Error converting PDF: {e}")
+        return None
     return _rag_cache[pdf_path]
 
 @tool
@@ -66,7 +70,10 @@ def extract_paths_from_pdf(pdf_path: str) -> str:
         if "```" in content:
             content = re.sub(r"```(python)?", "", content).strip("`").strip()
         paths = ast.literal_eval(content)
-        return ", ".join(paths) if isinstance(paths, list) else "None found."
+        result = ", ".join(paths) if isinstance(paths, list) else "None found."
+        if len(result) > 4000:
+            return result[:4000] + "\n... [TRUNCATED FOR CONTEXT SAFETY] ..."
+        return result
     except Exception as e:
         return f"Error extracting paths: {str(e)}"
 

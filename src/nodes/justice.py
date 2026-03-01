@@ -3,7 +3,9 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
+from langchain_core.messages import HumanMessage
 from src.state import AgentState, AuditReport, CriterionResult, JudicialOpinion
+from src.llm_factory import get_llm
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +18,8 @@ def synthesize_verdicts(state: AgentState) -> Dict:
     - Rule of Security: Security flaws cap at 3.
     - Rule of Evidence: Overrule hallucination if evidence is missing.
     - Rule of Functionality: Tech Lead weight for architecture.
+    
+    Synchronous version.
     """
     rubric_dimensions = state.get("rubric_dimensions", [])
     opinions = state.get("opinions", [])
@@ -91,13 +95,16 @@ def synthesize_verdicts(state: AgentState) -> Dict:
             remediation=remediation
         ))
 
-    # 2. Build AuditReport
+    # 2. Calculate Overall Score
     overall_score = sum(c.final_score for c in criterion_results) / len(criterion_results) if criterion_results else 0.0
+
+    # 3. Generate LLM Executive Summary (Synchronous call)
+    summary = _generate_llm_summary(overall_score, criterion_results)
     
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # 3. Build AuditReport
     report = AuditReport(
         repo_url=state.get("repo_url", "N/A"),
-        executive_summary=f"Audit completed at {now_str}. The system evaluated {len(criterion_results)} dimensions across code and documentation. Final Verdict: {overall_score:.2f}/5.0",
+        executive_summary=summary,
         overall_score=overall_score,
         criteria=criterion_results,
         remediation_plan="\n".join([f"### {c.dimension_name}\n- {c.remediation}" for c in criterion_results if c.final_score < 4])
@@ -122,6 +129,43 @@ def synthesize_verdicts(state: AgentState) -> Dict:
     print(f"--- Chief Justice: Final Audit Report Generated at {output_dir}/{filename} ---")
 
     return {"final_report": report}
+
+def _generate_llm_summary(overall_score: float, results: List[CriterionResult]) -> str:
+    """Synthesizes all findings into a professional Executive Summary using an LLM. Synchronous."""
+    llm = get_llm()
+    
+    findings_context = ""
+    for c in results:
+        findings_context += f"- {c.dimension_name}: {c.final_score}/5. "
+        if c.judge_opinions:
+            # Aggregate the core arguments from judges for this dimension
+            args = " ".join([op.argument[:150] for op in c.judge_opinions])
+            findings_context += f"Judicial Consensus/Conflict: {args}\n"
+            
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    prompt = f"""
+    You are the Chief Justice of the Digital Courtroom. 
+    Synthesize the following forensic audit results into a cohesive, high-level Executive Summary.
+    
+    Audit Completion Time: {now_str}
+    Overall Consolidated Stakeholder Score: {overall_score:.2f} / 5.0
+    
+    Individual Dimension Findings:
+    {findings_context}
+    
+    The summary MUST:
+    1. Start with a clear statement of the audit's overall result and the consolidated score.
+    2. Synthesize the 'vibe' of the project - is it security-first? Is documentation lagging code? 
+    3. Highlight the most critical risk areas (scores <= 2) and the strongest architectural wins (scores >= 4).
+    4. Be professional, objective, and written for senior stakeholders.
+    5. Avoid repeating the list - instead, synthesize the overall quality.
+    """
+    
+    try:
+        response = llm.invoke([HumanMessage(content=prompt)])
+        return response.content.strip()
+    except Exception as e:
+        return f"Audit completed at {now_str}. Overall Score: {overall_score:.2f}/5.0. (Manual fallback: System evaluated {len(results)} dimensions with satisfactory results across the board.)"
 
 def generate_report_markdown(report: AuditReport) -> str:
     """Professional rendering of the AuditReport as Markdown."""
