@@ -23,6 +23,7 @@ def _run_judge_persona(
     system_prompt_content = load_prompt(persona_name)
     rubric_dimensions = state.get("rubric_dimensions", [])
     all_opinions = []
+    max_retries = 3
     
     for dimension in rubric_dimensions:
         dim_id = dimension.get("id")

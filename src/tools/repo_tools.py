@@ -40,11 +40,21 @@ def list_files(repo_path: str, recursive: bool = True) -> str:
         return "Error: Path does not exist."
     
     try:
+        ignored = [".git", ".venv", "__pycache__", ".pytest_cache", "node_modules", ".gemini", "audit", ".specify"]
         if recursive:
-            files = [str(f.relative_to(path)) for f in path.rglob("*") if f.is_file() and ".git" not in f.parts]
+            files = []
+            for f in path.rglob("*"):
+                if f.is_file():
+                    # Check if any part of the path is in ignored list
+                    if not any(ig in f.parts for ig in ignored):
+                        files.append(str(f.relative_to(path)))
         else:
-            files = [f.name for f in path.iterdir() if f.is_file()]
-        return "\n".join(files)
+            files = [f.name for f in path.iterdir() if f.is_file() and f.name not in ignored]
+            
+        output = "\n".join(files)
+        if len(output) > 8000:
+            return output[:8000] + "\n... [LIST TRUNCATED FOR CONTEXT SAFETY] ..."
+        return output
     except Exception as e:
         return f"Error listing files: {str(e)}"
 
@@ -58,7 +68,10 @@ def read_file(repo_path: str, file_path: str) -> str:
         return f"Error: File {file_path} not found."
     
     try:
-        return full_path.read_text(errors="replace")
+        content = full_path.read_text(errors="replace")
+        if len(content) > 6000:
+            return content[:6000] + "\n... [FILE TRUNCATED FOR CONTEXT SAFETY] ..."
+        return content
     except Exception as e:
         return f"Error reading file: {str(e)}"
 
@@ -85,7 +98,7 @@ def grep_search(repo_path: str, pattern: str) -> str:
     """
     try:
         result = subprocess.run(
-            ["grep", "-r", pattern, repo_path],
+            ["grep", "-r", "--exclude-dir=.git", "--exclude-dir=.venv", "--exclude-dir=node_modules", "--exclude-dir=.gemini", "--exclude-dir=audit", "--exclude-dir=.specify", pattern, repo_path],
             capture_output=True,
             text=True,
             timeout=30

@@ -115,7 +115,7 @@ def doc_analyst_node(state: AgentState) -> Dict:
     """Dynamic agent that audits the PDF report using RAG tools."""
     import os
     # Use key 2 for Docs
-    key = os.getenv("OPENROUTER_API_KEY_2") or os.getenv("OPENROUTER_API_KEY")
+    key = os.getenv("OPENROUTER_API_KEY_2")
     llm = get_llm(api_key=key)
     # Also provide repo tools so the doc analyst can cross-reference file paths!
     tools = [query_pdf_report, extract_paths_from_pdf, clone_repository, list_files, read_file]
@@ -140,7 +140,7 @@ def vision_inspector_node(state: AgentState) -> Dict:
     """Dynamic agent that audits visual diagrams using Qwen2.5-VL via Hugging Face."""
     import os
     # Use key 3 for Vision
-    key = os.getenv("OPENROUTER_API_KEY_3") or os.getenv("OPENROUTER_API_KEY")
+    key = os.getenv("OPENROUTER_API_KEY_3")
     llm = get_llm(api_key=key)
     # Note: tools are bound to the agent
     tools = [extract_images_from_pdf, analyze_image_with_vision]

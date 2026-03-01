@@ -20,10 +20,15 @@ def mock_state_with_opinions():
         }
     }
 
+@patch("src.nodes.justice.get_llm")
 @patch("src.nodes.justice.Path.mkdir")
 @patch("builtins.open")
-def test_synthesize_verdicts_base_case(mock_open, mock_mkdir, mock_state_with_opinions):
+def test_synthesize_verdicts_base_case(mock_open, mock_mkdir, mock_get_llm, mock_state_with_opinions):
     """Test standard synthesis without triggering special rules."""
+    mock_llm = MagicMock()
+    mock_llm.invoke.return_value = MagicMock(content="Mocked Summary")
+    mock_get_llm.return_value = mock_llm
+    
     result = synthesize_verdicts(mock_state_with_opinions)
     
     assert "final_report" in result
@@ -35,10 +40,15 @@ def test_synthesize_verdicts_base_case(mock_open, mock_mkdir, mock_state_with_op
     # (4.33 + 4) / 2 = 4.16 => rounded to 4
     assert report.criteria[0].final_score == 4
 
+@patch("src.nodes.justice.get_llm")
 @patch("src.nodes.justice.Path.mkdir")
 @patch("builtins.open")
-def test_rule_of_security_cap(mock_open, mock_mkdir, mock_state_with_opinions):
+def test_rule_of_security_cap(mock_open, mock_mkdir, mock_get_llm, mock_state_with_opinions):
     """Test that a security flaw reported by Prosecutor caps the score at 3."""
+    mock_llm = MagicMock()
+    mock_llm.invoke.return_value = MagicMock(content="Mocked Summary")
+    mock_get_llm.return_value = mock_llm
+    
     mock_state_with_opinions["opinions"][0] = JudicialOpinion(
         judge="Prosecutor", criterion_id="dim_1", score=1, argument="Critical security vulnerability found.", cited_evidence=[]
     )
@@ -50,10 +60,15 @@ def test_rule_of_security_cap(mock_open, mock_mkdir, mock_state_with_opinions):
     assert result["final_report"].criteria[0].final_score == 3
     assert "Rule of Security" in result["final_report"].criteria[0].dissent_summary
 
+@patch("src.nodes.justice.get_llm")
 @patch("src.nodes.justice.Path.mkdir")
 @patch("builtins.open")
-def test_rule_of_evidence_hallucination(mock_open, mock_mkdir, mock_state_with_opinions):
+def test_rule_of_evidence_hallucination(mock_open, mock_mkdir, mock_get_llm, mock_state_with_opinions):
     """Test that Defense hallucinating a high score without missing evidence triggers a penalty."""
+    mock_llm = MagicMock()
+    mock_llm.invoke.return_value = MagicMock(content="Mocked Summary")
+    mock_get_llm.return_value = mock_llm
+    
     # Defense claims 5, but evidence is actually missing
     mock_state_with_opinions["opinions"] = [
         JudicialOpinion(judge="Defense", criterion_id="dim_1", score=5, argument="Great", cited_evidence=[])
@@ -65,11 +80,16 @@ def test_rule_of_evidence_hallucination(mock_open, mock_mkdir, mock_state_with_o
     # Base score = 5.0. Missing evidence penalty = -1.5 => 3.5 => rounded to 4
     assert result["final_report"].criteria[0].final_score == 4
     # Wait, the rule says max 1.0, wait, it says max(1.0, final_score - 1.5). 5 - 1.5 = 3.5.
-    
+
+@patch("src.nodes.justice.get_llm")
 @patch("src.nodes.justice.Path.mkdir")
 @patch("builtins.open")
-def test_timestamped_report_generation(mock_open, mock_mkdir, mock_state_with_opinions):
+def test_timestamped_report_generation(mock_open, mock_mkdir, mock_get_llm, mock_state_with_opinions):
     """Test that it tries to save the files with timestamping."""
+    mock_llm = MagicMock()
+    mock_llm.invoke.return_value = MagicMock(content="Mocked Summary")
+    mock_get_llm.return_value = mock_llm
+    
     with patch("src.nodes.justice.datetime") as mock_datetime:
         mock_datetime.now.return_value.strftime.return_value = "20240101_120000"
         
